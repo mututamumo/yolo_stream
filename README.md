@@ -7,7 +7,9 @@ topic /detections
 
 ## TOOLS USED:
 
-Raspberry Pi 5 Pi camera V2 linux development machine
+Raspberry Pi 5 Pi 
+camera V2 
+linux development machine
 
 ## find PI and laptop ip
 
