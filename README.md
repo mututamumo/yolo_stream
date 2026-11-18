@@ -16,6 +16,21 @@ linux development machine
 hostname -I
 
 ## run sender script (pi)
+### Create the sender script
+cat > ~/sender_pi.sh << 'EOF'
+#!/usr/bin/env bash
+# rpicam-vid (system libcamera) -> x264 -> RTP over TCP. The laptop connects in.
+unset GST_PLUGIN_PATH
+PORT=${PORT:-5600}; W=${W:-640}; H=${H:-480}; FPS=${FPS:-15}
+LD_LIBRARY_PATH=/lib/aarch64-linux-gnu rpicam-vid -t 0 -n \
+  --width $W --height $H --framerate $FPS --codec yuv420 --flush -o - | \
+gst-launch-1.0 -e fdsrc fd=0 ! \
+  rawvideoparse format=i420 width=$W height=$H framerate=$FPS/1 ! \
+  x264enc tune=zerolatency speed-preset=ultrafast bitrate=2000 key-int-max=$FPS ! \
+  h264parse config-interval=1 ! rtph264pay pt=96 config-interval=1 ! \
+  rtpstreampay ! tcpserversink host=0.0.0.0 port=$PORT sync=false
+EOF
+chmod +x ~/sender_pi.sh
 
 \~/sender_pi.sh
 
@@ -53,3 +68,68 @@ PI_HOST=192.168.x.x
 conf:=0.3
 
 3 ros2 topic echo /detections --no-daemon
+
+# UDP SETUP
+## clone repo
+git clone https://github.com/mututamumo/yolo_stream.git
+cd ~/yolo_stream
+
+
+# Run on both the Raspberry Pi and the Laptop
+hostname -I
+
+# Or on Linux/WSL to list IPv4 addresses clearly:
+ip -4 addr | grep -w inet
+
+### Open PowerShell as Administrator, add the firewall rules for UDP port 5600, and restart WSL:powershell
+New-NetFirewallHyperVRule -Name "yolo-udp" -DisplayName "yolo udp 5600" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol UDP -LocalPorts 5600
+
+New-NetFirewallRule -DisplayName "yolo-udp-5600" -Direction Inbound -Protocol UDP -LocalPort 5600 -Action Allow
+
+wsl --shutdown
+
+
+## Verify UDP Connectivity
+
+Test that UDP packets reach your laptop from the Pi:
+• On Laptop: nc -u -l 5600
+• On Pi: echo hello | nc -u -w1 <LAPTOP_IP> 5600
+
+## Create & Run the UDP Sender (Raspberry Pi)
+
+cat > ~/sender_pi_udp.sh << 'EOF'
+#!/usr/bin/env bash
+# rpicam-vid (system libcamera) -> x264 -> RTP over UDP to the laptop.
+unset GST_PLUGIN_PATH
+LAPTOP=${LAPTOP:?set LAPTOP=<laptop LAN address>}
+PORT=${PORT:-5600}; W=${W:-640}; H=${H:-480}; FPS=${FPS:-15}
+LD_LIBRARY_PATH=/lib/aarch64-linux-gnu rpicam-vid -t 0 -n \
+  --width $W --height $H --framerate $FPS --codec yuv420 --flush -o - | \
+gst-launch-1.0 -e fdsrc fd=0 ! \
+  rawvideoparse format=i420 width=$W height=$H framerate=$FPS/1 ! \
+  x264enc tune=zerolatency speed-preset=ultrafast bitrate=2000 key-int-max=$FPS ! \
+  h264parse config-interval=1 ! rtph264pay pt=96 config-interval=1 ! \
+  udpsink host=$LAPTOP port=$PORT sync=false
+EOF
+chmod +x ~/sender_pi_udp.sh
+
+## Start streaming to your laptop's IP address:
+
+LAPTOP=<LAPTOP_IP> ~/sender_pi_udp.
+
+##  Run the ROS 2 Detection Pipeline (Laptop)
+
+### Run the three-terminal pipeline on your laptop with ROS 2 Jazzy and 
+
+rmw_zenoh_cpp configured: start the Zenoh router :
+
+ ros2 run rmw_zenoh_cpp rmw_zenohd
+
+launch yolo_node.py in UDP mode (leaving PI_HOST unset for local port 5600) with:
+ 
+ python yolo_node.py --ros-args -p show:=true -p conf:=0.3
+
+ and verify output using 
+ 
+ ros2 topic echo /detections --once --no-daemon.
+
